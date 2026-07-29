@@ -1,0 +1,26 @@
+{
+  "name": "dubpay-backend",
+  "version": "1.0.0",
+  "description": "DubPay Backend - Full Crypto Support",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@solana/spl-token": "^0.3.9",
+    "@solana/web3.js": "^1.89.1",
+    "axios": "^1.6.7",
+    "bitcoinjs-lib": "^6.1.5",
+    "cors": "^2.8.5",
+    "ecpair": "^2.1.0",
+    "ethers": "^6.10.0",
+    "express": "^4.18.2",
+    "googleapis": "^173.0.0",
+    "ripple-lib": "^1.10.1",
+    "tiny-secp256k1": "^2.2.3",
+    "tronweb": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
