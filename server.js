@@ -41,8 +41,8 @@ app.use(express.json());
 // 🔥 RATE LIMITING
 // ============================================================
 const limiter = rateLimit({
-windowMs: 15 * 60 * 1000, // 15 minutes
-max: 100, // 100 requests per window
+windowMs: 15 * 60 * 1000,
+max: 100,
 message: 'Too many requests, please try again later.'
 });
 app.use('/api/', limiter);
@@ -52,7 +52,6 @@ app.use('/api/', limiter);
 // ============================================================
 const sheets = google.sheets('v4');
 
-// You need to add these to your .env file
 const GOOGLE_SHEETS_PRIVATE_KEY = process.env.GOOGLE_SHEETS_PRIVATE_KEY || '';
 const GOOGLE_SHEETS_CLIENT_EMAIL = process.env.GOOGLE_SHEETS_CLIENT_EMAIL || '';
 const GOOGLE_SHEETS_SPREADSHEET_ID = process.env.GOOGLE_SHEETS_SPREADSHEET_ID || '';
@@ -70,9 +69,6 @@ scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 return googleAuth;
 }
 
-// ============================================================
-// 🔥 GOOGLE SHEETS FUNCTIONS
-// ============================================================
 async function appendToSheet(tx_ref, orderData) {
 try {
 const auth = getGoogleAuth();
@@ -121,7 +117,6 @@ logger.warn('Google Sheets not configured - skipping update');
 return;
 }
 
-// Search for the row with matching tx_ref
 const response = await sheets.spreadsheets.values.get({
 auth: auth,
 spreadsheetId: GOOGLE_SHEETS_SPREADSHEET_ID,
@@ -132,7 +127,7 @@ const rows = response.data.values;
 let rowIndex = -1;
 for (let i = 0; i < rows.length; i++) {
 if (rows[i][0] === tx_ref) {
-rowIndex = i + 1; // 1-based index for Sheets API
+rowIndex = i + 1;
 break;
 }
 }
@@ -142,7 +137,6 @@ logger.warn(`⚠️ Order ${tx_ref} not found in Google Sheets`);
 return;
 }
 
-// Build update data
 const updateData = [];
 const columns = {
 status: 7,
@@ -303,7 +297,6 @@ network: 'fantom'
 }
 };
 
-// Log which wallets are configured
 Object.keys(WALLETS).forEach(coin => {
 const wallet = WALLETS[coin];
 if (wallet.privateKey) {
@@ -339,9 +332,6 @@ const COIN_TO_WALLET = {
 'FTM': 'FTM'
 };
 
-// ============================================================
-// 📌 GET WALLET FOR COIN
-// ============================================================
 function getWalletForCoin(coinSymbol, network) {
 let walletKey;
 
@@ -380,7 +370,6 @@ throw new Error(`No private key provided for ${coinName}`);
 
 const input = privateKeyInput.trim();
 
-// FORMAT 1: Base58 (Solana)
 if (input.length >= 80 && input.length <= 100) {
 try {
 const decoded = bs58.decode(input);
@@ -391,7 +380,6 @@ return Uint8Array.from(decoded);
 } catch (e) { /* Not Base58 */ }
 }
 
-// FORMAT 2: JSON array
 try {
 const array = JSON.parse(input);
 if (Array.isArray(array) && (array.length === 64 || array.length === 32)) {
@@ -400,7 +388,6 @@ return Uint8Array.from(array);
 }
 } catch (e) { /* Not JSON array */ }
 
-// FORMAT 3: Base64 string
 try {
 const base64Buffer = Buffer.from(input, 'base64');
 if (base64Buffer.length === 64 || base64Buffer.length === 32) {
@@ -409,7 +396,6 @@ return Uint8Array.from(base64Buffer);
 }
 } catch (e) { /* Not Base64 */ }
 
-// FORMAT 4: Hex string
 try {
 const hexClean = input.replace('0x', '').trim();
 if (/^[0-9a-f]{64}$/i.test(hexClean) || /^[0-9a-f]{128}$/i.test(hexClean) || /^[0-9a-f]{32}$/i.test(hexClean)) {
@@ -419,19 +405,17 @@ return Uint8Array.from(buffer);
 }
 } catch (e) { /* Not Hex */ }
 
-// FORMAT 5: WIF (Bitcoin)
 if (input.startsWith('5') || input.startsWith('K') || input.startsWith('L') || input.startsWith('T')) {
 logger.info(`✅ ${coinName}: Using WIF format`);
 return input;
 }
 
-// FORMAT 6: Raw string (TRON, etc.)
 logger.info(`✅ ${coinName}: Using raw string format`);
 return input;
 }
 
 // ============================================================
-// 🔥 REAL BALANCE CHECKS - ALL WORKING COINS
+// 🔥 BALANCE CHECKS
 // ============================================================
 async function getWalletBalance(coinSymbol, network) {
 logger.info(`🔍 Checking balance for ${coinSymbol}...`);
@@ -446,12 +430,12 @@ return 0;
 }
 
 // ============================================================
-// 🔥 BTC BALANCE CHECK - WITH MULTIPLE FALLBACKS (NO VPN NEEDED)
+// 🔥 BTC BALANCE CHECK - FIXED WITH MULTIPLE FALLBACKS
 // ============================================================
 if (coinSymbol === 'BTC') {
 const errors = [];
 
-// PRIMARY: blockchair.com - Works worldwide without VPN
+// PRIMARY: blockchair.com
 try {
 logger.info(`📡 Checking BTC via blockchair.com for: ${address}`);
 const response = await axios.get(`https://api.blockchair.com/bitcoin/dashboards/address/${address}`, {
@@ -495,22 +479,6 @@ errors.push(`mempool.space: ${error.message}`);
 logger.warn(`⚠️ Mempool.space failed: ${error.message}`);
 }
 
-// FALLBACK 3: blockchain.com
-try {
-logger.info(`📡 Checking BTC via blockchain.com for: ${address}`);
-const response = await axios.get(`https://blockchain.com/btc/address/${address}?format=json`, {
-headers: { 'Cache-Control': 'no-cache' },
-timeout: 8000
-});
-const balance = response.data.final_balance / 100000000;
-logger.info(`💰 BTC Balance (blockchain.com): ${balance} BTC`);
-return balance;
-} catch (error) {
-errors.push(`blockchain.com: ${error.message}`);
-logger.warn(`⚠️ Blockchain.com failed: ${error.message}`);
-}
-
-// ALL FAILED - return 0 and log all errors
 logger.error(`❌ All BTC balance checks failed: ${errors.join(' | ')}`);
 return 0;
 }
@@ -623,10 +591,9 @@ return 0;
 }
 
 // ============================================================
-// 🔥 SEND FUNCTIONS - ALL COINS
+// 🔥 SEND FUNCTIONS
 // ============================================================
 
-// Helper: Parse EVM private key
 function parseEVMPrivateKey(privateKeyInput) {
 let privateKey = privateKeyInput;
 if (privateKeyInput instanceof Uint8Array) {
@@ -649,7 +616,7 @@ privateKey = '0x' + Buffer.from(decoded).toString('hex');
 return privateKey;
 }
 
-// 📌 SEND MATIC (Polygon)
+// 📌 SEND MATIC
 async function sendMATIC(privateKeyInput, toAddress, amountMATIC) {
 try {
 const provider = new ethers.JsonRpcProvider(POLYGON_RPC);
@@ -670,7 +637,7 @@ throw error;
 }
 }
 
-// 📌 SEND ARB (Arbitrum)
+// 📌 SEND ARB
 async function sendARB(privateKeyInput, toAddress, amountARB) {
 try {
 const provider = new ethers.JsonRpcProvider(ARBITRUM_RPC);
@@ -691,7 +658,7 @@ throw error;
 }
 }
 
-// 📌 SEND OP (Optimism)
+// 📌 SEND OP
 async function sendOP(privateKeyInput, toAddress, amountOP) {
 try {
 const provider = new ethers.JsonRpcProvider(OPTIMISM_RPC);
@@ -712,7 +679,7 @@ throw error;
 }
 }
 
-// 📌 SEND FTM (Fantom)
+// 📌 SEND FTM
 async function sendFTM(privateKeyInput, toAddress, amountFTM) {
 try {
 const provider = new ethers.JsonRpcProvider(FANTOM_RPC);
@@ -733,7 +700,7 @@ throw error;
 }
 }
 
-// 📌 SEND TRX (Tron)
+// 📌 SEND TRX
 async function sendTRX(privateKeyInput, toAddress, amountTRX) {
 try {
 let privateKey = privateKeyInput;
@@ -770,12 +737,15 @@ throw error;
 }
 }
 
-// 📌 SEND BTC
+// ============================================================
+// 🔥 SEND BTC - FIXED! NOW USES ALL UTXOs
+// ============================================================
 async function sendBTC(privateKeyInput, toAddress, amountBTC) {
 try {
 const wallet = getWalletForCoin('BTC');
 logger.info(`📤 Sending ${amountBTC} BTC from ${wallet.address} to ${toAddress}`);
 
+// Get UTXOs
 let utxos;
 try {
 const response = await axios.get(`https://mempool.space/api/address/${wallet.address}/utxo`);
@@ -796,9 +766,12 @@ throw new Error('No UTXOs found for this address. Please fund your BTC wallet.')
 }
 
 const satoshisNeeded = Math.round(amountBTC * 100000000);
+
+// ✅ FIXED: Use ALL UTXOs
 const totalAvailable = utxos.reduce((sum, utxo) => sum + utxo.value, 0);
 logger.info(`💰 Total available: ${totalAvailable} sats (${(totalAvailable/100000000).toFixed(8)} BTC)`);
 
+// Calculate fee based on number of UTXOs
 const estimatedFee = Math.min(25000, Math.round(utxos.length * 2500 + 5000));
 const totalNeeded = satoshisNeeded + estimatedFee;
 
@@ -811,16 +784,11 @@ throw new Error(
 );
 }
 
-let selectedUTXOs = [];
-let totalSats = 0;
-for (const utxo of utxos) {
-if (totalSats < totalNeeded) {
-selectedUTXOs.push(utxo);
-totalSats += utxo.value;
-}
-}
+// ✅ FIXED: Select ALL UTXOs, not just some
+let selectedUTXOs = utxos;
+let totalSats = totalAvailable;
 
-logger.info(`✅ Selected ${selectedUTXOs.length} UTXOs, total: ${totalSats} sats`);
+logger.info(`✅ Using ALL ${selectedUTXOs.length} UTXOs, total: ${totalSats} sats`);
 
 let privateKeyWIF = privateKeyInput;
 if (privateKeyInput instanceof Uint8Array) {
@@ -860,6 +828,7 @@ address: toAddress,
 value: satoshisNeeded
 });
 
+// Calculate fee and change
 const fee = Math.min(estimatedFee, totalSats - satoshisNeeded - 1000);
 const change = totalSats - satoshisNeeded - fee;
 
@@ -869,6 +838,8 @@ address: wallet.address,
 value: change
 });
 logger.info(`💰 Change: ${change} sats sent back to wallet`);
+} else {
+logger.info(`💰 No significant change (${change} sats)`);
 }
 
 logger.info(`💰 Actual fee: ${fee} sats`);
@@ -1354,8 +1325,12 @@ return { success: false, error: error.message };
 }
 
 // ============================================================
-// 📌 CHECK BALANCE
+// 📌 API ENDPOINTS
 // ============================================================
+
+// In-memory fallback
+const orders = {};
+
 app.post('/api/check-balance', async (req, res) => {
 try {
 const { coinSymbol, network, amount } = req.body;
@@ -1381,9 +1356,6 @@ res.status(500).json({ success: false, error: error.message });
 }
 });
 
-// ============================================================
-// 📌 CREATE PAYMENT
-// ============================================================
 app.post('/api/create-payment', async (req, res) => {
 try {
 const {
@@ -1430,10 +1402,7 @@ email: email || 'customer@dubpay.com',
 name: name || 'DubPay Customer'
 };
 
-// Save to Google Sheets
 await appendToSheet(tx_ref, orderData);
-
-// Also keep in memory for faster access
 orders[tx_ref] = orderData;
 
 logger.info(`📝 Order created: ${tx_ref}`);
@@ -1490,9 +1459,6 @@ res.status(500).json({ success: false, error: error.message });
 }
 });
 
-// ============================================================
-// 📌 VERIFY PAYMENT
-// ============================================================
 app.get('/api/verify-payment', async (req, res) => {
 try {
 const { tx_ref } = req.query;
@@ -1503,7 +1469,6 @@ if (!tx_ref) {
 return res.status(400).json({ error: 'Missing transaction reference' });
 }
 
-// Try memory first, then Google Sheets
 let order = orders[tx_ref];
 if (!order) {
 const sheetOrders = await getOrdersFromSheet();
@@ -1558,9 +1523,6 @@ res.status(500).json({ error: error.message });
 }
 });
 
-// ============================================================
-// 📌 GET ORDER STATUS
-// ============================================================
 app.get('/api/order-status/:tx_ref', async (req, res) => {
 try {
 const tx_ref = req.params.tx_ref;
@@ -1584,9 +1546,6 @@ res.status(500).json({ error: error.message });
 }
 });
 
-// ============================================================
-// 📌 FLUTTERWAVE WEBHOOK
-// ============================================================
 app.post('/api/flutterwave-webhook', async (req, res) => {
 try {
 const signature = req.headers['verif-hash'];
@@ -1633,9 +1592,6 @@ res.status(500).send('Webhook error');
 }
 });
 
-// ============================================================
-// 📌 OTHER ENDPOINTS
-// ============================================================
 app.get('/api/health', (req, res) => {
 res.json({
 status: 'ok',
@@ -1727,6 +1683,4 @@ logger.warn(`⚠️ Google Sheets NOT configured. Orders will NOT be saved perma
 logger.info(`\n`);
 });
 
-// In-memory fallback if Google Sheets not configured
-const orders = {};
 module.exports = app;
