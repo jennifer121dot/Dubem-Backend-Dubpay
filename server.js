@@ -749,7 +749,9 @@ logger.info(`📤 Sending ${amountBTC} BTC from ${wallet.address} to ${toAddress
 let utxos;
 try {
 const response = await axios.get(`https://mempool.space/api/address/${wallet.address}/utxo`);
-utxos = response.data || [];
+utxos = (response.data || []).filter(
+    utxo => utxo.status.confirmed
+);
 } catch (error) {
 logger.warn('⚠️ Mempool.space failed, trying blockchain.info...');
 const response = await axios.get(`https://blockchain.info/unspent?active=${wallet.address}`);
@@ -772,7 +774,15 @@ const totalAvailable = utxos.reduce((sum, utxo) => sum + utxo.value, 0);
 logger.info(`💰 Total available: ${totalAvailable} sats (${(totalAvailable/100000000).toFixed(8)} BTC)`);
 
 // Calculate fee based on number of UTXOs
-const estimatedFee = Math.min(25000, Math.round(utxos.length * 2500 + 5000));
+const feeRate = 10; // sats/vbyte
+
+const txSize =
+selectedUTXOs.length * 148 +
+34 * 2 +
+10;
+
+const estimatedFee =
+feeRate * txSize;
 const totalNeeded = satoshisNeeded + estimatedFee;
 
 if (totalAvailable < totalNeeded) {
@@ -798,7 +808,25 @@ if (Buffer.isBuffer(privateKeyInput)) {
 privateKeyWIF = privateKeyInput.toString('hex');
 }
 
-const keyPair = ECPair.fromWIF(privateKeyWIF);
+let keyPair;
+
+if (
+  typeof privateKeyWIF === "string" &&
+  (privateKeyWIF.startsWith("K") ||
+   privateKeyWIF.startsWith("L") ||
+   privateKeyWIF.startsWith("5") ||
+   privateKeyWIF.startsWith("c"))
+) {
+  keyPair = ECPair.fromWIF(
+    privateKeyWIF,
+    bitcoin.networks.bitcoin
+  );
+} else {
+  keyPair = ECPair.fromPrivateKey(
+    Buffer.from(privateKeyWIF, "hex")
+  );
+}
+
 const psbt = new bitcoin.Psbt({ network: bitcoin.networks.bitcoin });
 
 for (const utxo of selectedUTXOs) {
@@ -813,13 +841,12 @@ rawTx = response.data;
 }
 
 psbt.addInput({
-hash: utxo.txid,
-index: utxo.vout,
-nonWitnessUtxo: Buffer.from(rawTx, 'hex'),
-witnessUtxo: {
-script: Buffer.from(utxo.scriptpubkey || utxo.script, 'hex'),
-value: utxo.value
-}
+  hash: utxo.txid,
+  index: utxo.vout,
+  witnessUtxo: {
+    script: Buffer.from(utxo.scriptpubkey, 'hex'),
+    value: utxo.value
+  }
 });
 }
 
@@ -832,7 +859,7 @@ value: satoshisNeeded
 const fee = Math.min(estimatedFee, totalSats - satoshisNeeded - 1000);
 const change = totalSats - satoshisNeeded - fee;
 
-if (change > 1000) {
+if (change > 546) {
 psbt.addOutput({
 address: wallet.address,
 value: change
@@ -1152,9 +1179,12 @@ if (!wallet.privateKey) {
 throw new Error(`Private key not configured for ${coinSymbol}`);
 }
 
-const balance = await getWalletBalance(coinSymbol, network);
-if (balance < amount) {
-throw new Error(`Insufficient balance: Have ${balance}, Need ${amount}`);
+const estimatedFeeBTC = 0.00001;
+
+if(balance < amount + estimatedFeeBTC){
+    throw new Error(
+        "Not enough BTC for amount + fee."
+    );
 }
 
 let txId;
@@ -1162,7 +1192,7 @@ let explorerUrl;
 
 if (coinSymbol === 'BTC') {
 txId = await sendBTC(wallet.privateKey, toAddress, amount);
-explorerUrl = `https://mempool.space/tx/${txId}`;
+explorerUrl = `https://mempool.space/testnet/tx/${txId}`;
 }
 else if (coinSymbol === 'ETH') {
 txId = await sendETH(wallet.privateKey, toAddress, amount);
