@@ -748,7 +748,7 @@ logger.info(`📤 Sending ${amountBTC} BTC from ${wallet.address} to ${toAddress
 // Get UTXOs
 let utxos;
 try {
-const response = await axios.get(`https://mempool.space/api/address/${wallet.address}/utxo`);
+const response = await axios.get(`https://mempool.space/testnet/api/address/${wallet.address}/utxo`);
 utxos = (response.data || []).filter(
     utxo => utxo.status.confirmed
 );
@@ -775,6 +775,8 @@ logger.info(`💰 Total available: ${totalAvailable} sats (${(totalAvailable/100
 
 // Calculate fee based on number of UTXOs
 const feeRate = 10; // sats/vbyte
+
+let selectedUTXOs = utxos;
 
 const txSize =
 selectedUTXOs.length * 148 +
@@ -819,7 +821,7 @@ if (
 ) {
   keyPair = ECPair.fromWIF(
     privateKeyWIF,
-    bitcoin.networks.bitcoin
+    bitcoin.networks.testnet
   );
 } else {
   keyPair = ECPair.fromPrivateKey(
@@ -1180,6 +1182,10 @@ throw new Error(`Private key not configured for ${coinSymbol}`);
 }
 
 const estimatedFeeBTC = 0.00001;
+const balance = await getWalletBalance(
+    coinSymbol,
+    network
+);
 
 if(balance < amount + estimatedFeeBTC){
     throw new Error(
@@ -1516,7 +1522,7 @@ tx_ref: tx_ref
 logger.info(`✅ Order found: ${tx_ref}`);
 logger.info(`📊 Order status: ${order.status}`);
 
-const response = await fetch(`https://api.flutterwave.com/v3/transactions/${tx_ref}/verify`, {
+const response = await fetch(`https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=${tx_ref}`, {
 headers: {
 'Authorization': `Bearer ${FLUTTERWAVE_SECRET}`
 }
