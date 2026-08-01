@@ -224,7 +224,7 @@ return {};
 // ============================================================
 const FLUTTERWAVE_SECRET = process.env.FLUTTERWAVE_SECRET;
 const FLUTTERWAVE_WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
-const BACKEND_URL = process.env.BACKEND_URL || 'https://automatic-backend.onrender.com';
+const BACKEND_URL = process.env.BACKEND_URL || 'https://dubem-backend-dubpay.onrender.com';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://dubpaydub.netlify.app';
 
 const INFURA_KEY = process.env.INFURA_KEY;
@@ -827,12 +827,12 @@ if (
   );
 }
 
-const psbt = new bitcoin.Psbt({ network: bitcoin.networks.bitcoin });
+const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
 
 for (const utxo of selectedUTXOs) {
 let rawTx;
 try {
-const response = await axios.get(`https://mempool.space/api/tx/${utxo.txid}/hex`);
+const response = await axios.get(`https://mempool.space/testnet/api/tx/${utxo.txid}/hex`);
 rawTx = response.data;
 } catch (error) {
 logger.warn('⚠️ Mempool.space tx fetch failed, trying blockchain.info...');
@@ -881,7 +881,7 @@ const txHex = tx.toHex();
 
 let broadcastResponse;
 try {
-broadcastResponse = await axios.post('https://mempool.space/api/tx', txHex);
+broadcastResponse = await axios.post('https://mempool.space/testnet/api/tx', txHex);
 } catch (error) {
 logger.warn('⚠️ Mempool.space broadcast failed, trying blockchain.info...');
 broadcastResponse = await axios.post('https://blockchain.info/pushtx', `tx=${txHex}`);
