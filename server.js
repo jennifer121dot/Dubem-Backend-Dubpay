@@ -811,21 +811,44 @@ privateKeyWIF = privateKeyInput.toString('hex');
 
 let keyPair;
 
-if (
-  typeof privateKeyWIF === "string" &&
-  (privateKeyWIF.startsWith("K") ||
-   privateKeyWIF.startsWith("L") ||
-   privateKeyWIF.startsWith("5") ||
-   privateKeyWIF.startsWith("c"))
-) {
-  keyPair = ECPair.fromWIF(
-    privateKeyWIF,
-    bitcoin.networks.testnet
-  );
-} else {
-  keyPair = ECPair.fromPrivateKey(
-    Buffer.from(privateKeyWIF, "hex")
-  );
+if (privateKeyInput instanceof Uint8Array) {
+    keyPair = ECPair.fromPrivateKey(Buffer.from(privateKeyInput));
+}
+else if (Buffer.isBuffer(privateKeyInput)) {
+    keyPair = ECPair.fromPrivateKey(privateKeyInput);
+}
+else if (typeof privateKeyInput === "string") {
+
+    const key = privateKeyInput.trim();
+
+    // WIF (Mainnet or Testnet)
+    if (/^[5KLc]/.test(key)) {
+        try {
+            keyPair = ECPair.fromWIF(key, bitcoin.networks.testnet);
+        } catch {
+            keyPair = ECPair.fromWIF(key, bitcoin.networks.bitcoin);
+        }
+    }
+
+    // Hex
+    else if (/^(0x)?[0-9a-fA-F]{64}$/.test(key)) {
+        const hex = key.replace(/^0x/, "");
+        keyPair = ECPair.fromPrivateKey(Buffer.from(hex, "hex"));
+    }
+
+    // Base64
+    else {
+        const buf = Buffer.from(key, "base64");
+
+        if (buf.length === 32) {
+            keyPair = ECPair.fromPrivateKey(buf);
+        } else {
+            throw new Error("Unsupported BTC private key format.");
+        }
+    }
+}
+else {
+    throw new Error("Unsupported BTC private key type.");
 }
 
 const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
