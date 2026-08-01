@@ -1,3 +1,15 @@
+// ============================================================
+// 🔥 LOAD ENVIRONMENT VARIABLES FIRST
+// ============================================================
+require('dotenv').config();
+
+// Debug: Check if BTC variables are loaded
+console.log('\n🔍 ENVIRONMENT VARIABLES CHECK:');
+console.log('=================================');
+console.log('BTC_PRIVATE_KEY:', process.env.BTC_PRIVATE_KEY ? '✅ SET (length: ' + process.env.BTC_PRIVATE_KEY.length + ')' : '❌ MISSING');
+console.log('BTC_ADDRESS:', process.env.BTC_ADDRESS ? '✅ SET' : '❌ MISSING');
+console.log('=================================\n');
+
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -240,6 +252,233 @@ const OPTIMISM_RPC = 'https://mainnet.optimism.io';
 const FANTOM_RPC = 'https://rpc.ftm.tools';
 
 // ============================================================
+// 🔥 BTC WALLET CLASS - BUILT IN
+// ============================================================
+class BTCWallet {
+constructor(config) {
+if (!config.privateKey) {
+throw new Error('❌ BTC private key is required');
+}
+if (!config.address) {
+throw new Error('❌ BTC address is required');
+}
+
+this.privateKey = config.privateKey;
+this.address = config.address;
+this.network = config.network === 'testnet'
+? bitcoin.networks.testnet
+: bitcoin.networks.bitcoin;
+this.mempoolApi = config.mempoolApi || 'https://mempool.space/testnet/api';
+this.blockchainApi = config.blockchainApi || 'https://blockstream.info/testnet/api';
+this.keyPair = ECPair.fromWIF(this.privateKey, this.network);
+
+console.log('🔑 BTC Wallet initialized on:', this.network === bitcoin.networks.testnet ? 'TESTNET' : 'MAINNET');
+}
+
+async getBalance() {
+try {
+const response = await axios.get(
+`${this.mempoolApi}/address/${this.address}`
+);
+const balance = response.data.chain_stats.funded_txo_sum / 100000000;
+return balance;
+} catch (error) {
+const response = await axios.get(
+`${this.blockchainApi}/address/${this.address}`
+);
+const balance = response.data.chain_stats.funded_txo_sum - response.data.chain_stats.spent_txo_sum;
+return balance / 100000000;
+}
+}
+
+async getUtxos() {
+try {
+const response = await axios.get(
+`${this.mempoolApi}/address/${this.address}/utxo`
+);
+const utxos = response.data;
+for (const utxo of utxos) {
+try {
+const tx = await axios.get(
+`${this.mempoolApi}/tx/${utxo.txid}`
+);
+const output = tx.data.vout[utxo.vout];
+utxo.scriptpubkey = output.scriptpubkey;
+utxo.value = output.value;
+} catch {
+const tx = await axios.get(
+`${this.blockchainApi}/tx/${utxo.txid}`
+);
+const output = tx.data.vout[utxo.vout];
+utxo.scriptpubkey = output.scriptpubkey;
+utxo.value = output.value;
+}
+}
+return utxos;
+} catch (error) {
+throw new Error(`Failed to get UTXOs: ${error.message}`);
+}
+}
+
+async getEstimatedFee() {
+try {
+const response = await axios.get(
+`${this.mempoolApi}/v1/fees/recommended`
+);
+return {
+fastest: response.data.fastestFee,
+halfHour: response.data.halfHourFee,
+hour: response.data.hourFee,
+minimum: response.data.minimumFee
+};
+} catch {
+return {
+fastest: 20,
+halfHour: 15,
+hour: 10,
+minimum: 5
+};
+}
+}
+
+validateAddress(address) {
+try {
+bitcoin.address.toOutputScript(address, this.network);
+return true;
+} catch {
+throw new Error(`Invalid Bitcoin address: ${address}`);
+}
+}
+
+async send(toAddress, amountBTC, options = {}) {
+try {
+console.log(`📤 Sending ${amountBTC} BTC to ${toAddress}`);
+this.validateAddress(toAddress);
+
+const balance = await this.getBalance();
+const feeEstimate = await this.getEstimatedFee();
+const estimatedFeeBTC = ((250 * feeEstimate.halfHour) / 100000000);
+
+if (balance < amountBTC + estimatedFeeBTC) {
+throw new Error(
+`Insufficient balance. Need approximately ${amountBTC + estimatedFeeBTC} BTC including network fee`
+);
+}
+
+const utxos = await this.getUtxos();
+if (utxos.length === 0) {
+throw new Error('No UTXOs found. Please fund your wallet.');
+}
+
+const satoshisNeeded = Math.round(amountBTC * 100000000);
+const totalAvailable = utxos.reduce((sum, utxo) => sum + utxo.value, 0);
+
+const feeRate = options.feeRate || feeEstimate.halfHour;
+const estimatedFee = Math.min(25000, Math.round(utxos.length * 2500 + 5000));
+const totalNeeded = satoshisNeeded + estimatedFee;
+
+if (totalAvailable < totalNeeded) {
+throw new Error(
+`Insufficient funds: ${totalAvailable} sats available, ${totalNeeded} sats needed`
+);
+}
+
+// Select UTXOs
+const selectedUTXOs = [];
+let totalSats = 0;
+
+for (const utxo of utxos) {
+if (totalSats < totalNeeded) {
+selectedUTXOs.push(utxo);
+totalSats += utxo.value;
+}
+}
+
+// Build PSBT
+const psbt = new bitcoin.Psbt({ network: this.network });
+
+for (const utxo of selectedUTXOs) {
+let rawTx;
+try {
+const response = await axios.get(
+`${this.mempoolApi}/tx/${utxo.txid}/hex`
+);
+rawTx = response.data;
+} catch {
+const response = await axios.get(
+`${this.blockchainApi}/rawtx/${utxo.txid}`
+);
+rawTx = response.data;
+}
+
+psbt.addInput({
+hash: utxo.txid,
+index: utxo.vout,
+witnessUtxo: {
+script: Buffer.from(utxo.scriptpubkey, 'hex'),
+value: utxo.value
+}
+});
+}
+
+psbt.addOutput({
+address: toAddress,
+value: satoshisNeeded
+});
+
+const fee = Math.min(estimatedFee, totalSats - satoshisNeeded - 1000);
+const change = totalSats - satoshisNeeded - fee;
+
+if (change > 1000) {
+psbt.addOutput({
+address: this.address,
+value: change
+});
+}
+
+for (let i = 0; i < selectedUTXOs.length; i++) {
+psbt.signInput(i, this.keyPair);
+}
+
+psbt.finalizeAllInputs();
+const tx = psbt.extractTransaction();
+const txHex = tx.toHex();
+
+let broadcastResponse;
+try {
+broadcastResponse = await axios.post(
+`${this.mempoolApi}/tx`,
+txHex,
+{ headers: { 'Content-Type': 'text/plain' } }
+);
+} catch {
+broadcastResponse = await axios.post(
+`${this.blockchainApi}/pushtx`,
+`tx=${txHex}`
+);
+}
+
+const txId = broadcastResponse.data;
+console.log(`✅ BTC Transaction broadcasted: ${txId}`);
+
+return {
+txId,
+txHex,
+fromAddress: this.address,
+toAddress,
+amount: amountBTC,
+fee,
+explorerUrl: `https://mempool.space/testnet/tx/${txId}`
+};
+
+} catch (error) {
+console.error('❌ BTC send error:', error.message);
+throw error;
+}
+}
+}
+
+// ============================================================
 // 🔥 WALLET CONFIGURATION
 // ============================================================
 logger.info('🔍 Checking environment variables...');
@@ -248,7 +487,7 @@ const WALLETS = {
 BTC: {
 address: process.env.BTC_ADDRESS || '',
 privateKey: process.env.BTC_PRIVATE_KEY || '',
-network: 'bitcoin'
+network: 'testnet'
 },
 ETH: {
 address: process.env.ETH_ADDRESS || '',
@@ -367,8 +606,8 @@ throw new Error(`No wallet mapping for ${coinSymbol}`);
 
 const wallet = WALLETS[walletKey];
 
-// Log what we're getting
 logger.info(`🔍 Looking up wallet for ${coinSymbol}: walletKey=${walletKey}`);
+logger.info(`📝 Wallet has privateKey: ${wallet?.privateKey ? 'YES' : 'NO'}`);
 
 if (!wallet) {
 throw new Error(`Wallet ${walletKey} not configured`);
@@ -378,7 +617,6 @@ if (!wallet.privateKey) {
 throw new Error(`Private key not configured for ${coinSymbol} (wallet: ${walletKey})`);
 }
 
-// Return the wallet with both address and privateKey
 return {
 address: wallet.address,
 privateKey: wallet.privateKey
@@ -456,56 +694,24 @@ logger.warn(`⚠️ No address configured for ${coinSymbol}`);
 return 0;
 }
 
-// BTC BALANCE CHECK
+// BTC BALANCE CHECK - Using built-in BTCWallet class
 if (coinSymbol === 'BTC') {
-const errors = [];
-
-// PRIMARY: mempool.space
 try {
-logger.info(`📡 Checking BTC via mempool.space for: ${address}`);
-const response = await axios.get(`https://mempool.space/testnet/api/address/${address}`, {
-headers: { 'Cache-Control': 'no-cache' },
-timeout: 10000
+const btcWallet = new BTCWallet({
+privateKey: wallet.privateKey,
+address: wallet.address,
+network: 'testnet',
+mempoolApi: 'https://mempool.space/testnet/api',
+blockchainApi: 'https://blockstream.info/testnet/api'
 });
-const balance = response.data.chain_stats.funded_txo_sum / 100000000;
-logger.info(`💰 BTC Balance (mempool.space): ${balance} BTC`);
+
+const balance = await btcWallet.getBalance();
+logger.info(`💰 BTC Balance: ${balance} BTC`);
 return balance;
 } catch (error) {
-errors.push(`mempool.space: ${error.message}`);
-logger.warn(`⚠️ Mempool.space failed: ${error.message}`);
-}
-
-// FALLBACK 1: blockchair.com
-try {
-logger.info(`📡 Checking BTC via blockchair.com for: ${address}`);
-const response = await axios.get(`https://api.blockchair.com/bitcoin/testnet/dashboards/address/${address}`, {
-timeout: 10000
-});
-const balance = response.data.data[address].address.balance / 100000000;
-logger.info(`💰 BTC Balance (blockchair.com): ${balance} BTC`);
-return balance;
-} catch (error) {
-errors.push(`blockchair.com: ${error.message}`);
-logger.warn(`⚠️ Blockchair.com failed: ${error.message}`);
-}
-
-// FALLBACK 2: blockchain.info
-try {
-logger.info(`📡 Checking BTC via blockchain.info for: ${address}`);
-const response = await axios.get(`https://blockchain.info/balance?active=${address}`, {
-headers: { 'Cache-Control': 'no-cache' },
-timeout: 8000
-});
-const balance = response.data[address] / 100000000;
-logger.info(`💰 BTC Balance (blockchain.info): ${balance} BTC`);
-return balance;
-} catch (error) {
-errors.push(`blockchain.info: ${error.message}`);
-logger.warn(`⚠️ Blockchain.info failed: ${error.message}`);
-}
-
-logger.error(`❌ All BTC balance checks failed: ${errors.join(' | ')}`);
+logger.error(`❌ BTC balance check failed: ${error.message}`);
 return 0;
+}
 }
 
 if (coinSymbol === 'ETH') {
@@ -641,12 +847,18 @@ privateKey = '0x' + Buffer.from(decoded).toString('hex');
 return privateKey;
 }
 
-// 📌 SEND BTC - COMPLETELY FIXED
+// 📌 SEND BTC - Using built-in BTCWallet class
 async function sendBTC(privateKeyInput, toAddress, amountBTC) {
 try {
-// ✅ VALIDATE INPUT
+logger.info(`📤 Sending ${amountBTC} BTC to ${toAddress}`);
+
+// If private key is undefined, use the one from env directly
 if (!privateKeyInput) {
-throw new Error('Private key is undefined! Check your BTC_PRIVATE_KEY environment variable.');
+privateKeyInput = process.env.BTC_PRIVATE_KEY;
+}
+
+if (!privateKeyInput) {
+throw new Error('❌ BTC_PRIVATE_KEY is missing! Add it to .env file');
 }
 
 if (!toAddress) {
@@ -657,183 +869,22 @@ if (!amountBTC || amountBTC <= 0) {
 throw new Error('Valid amount is required');
 }
 
-logger.info(`📤 Sending ${amountBTC} BTC to ${toAddress}`);
-logger.info(`🔑 Private key type: ${typeof privateKeyInput}`);
-logger.info(`🔑 Private key length: ${privateKeyInput.length}`);
-
-// Get wallet address
-const wallet = getWalletForCoin('BTC');
-const fromAddress = wallet.address;
-
-if (!fromAddress) {
-throw new Error('BTC address not configured');
-}
-
-logger.info(`💰 From address: ${fromAddress}`);
-
-// Get UTXOs
-let utxos;
-try {
-const response = await axios.get(`https://mempool.space/testnet/api/address/${fromAddress}/utxo`);
-utxos = (response.data || []).filter(utxo => utxo.status.confirmed);
-} catch (error) {
-logger.warn('⚠️ Mempool.space failed, trying blockchain.info...');
-const response = await axios.get(`https://blockchain.info/unspent?active=${fromAddress}`);
-utxos = response.data.unspent_outputs.map(utxo => ({
-txid: utxo.tx_hash,
-vout: utxo.tx_output_n,
-value: utxo.value,
-scriptpubkey: utxo.script
-}));
-}
-
-if (!utxos || utxos.length === 0) {
-throw new Error('No UTXOs found for this address. Please fund your BTC wallet.');
-}
-
-const satoshisNeeded = Math.round(amountBTC * 100000000);
-const totalAvailable = utxos.reduce((sum, utxo) => sum + utxo.value, 0);
-logger.info(`💰 Total available: ${totalAvailable} sats (${(totalAvailable/100000000).toFixed(8)} BTC)`);
-
-// Calculate fee based on number of UTXOs
-const feeRate = 10; // sats/vbyte
-let selectedUTXOs = utxos;
-const txSize = selectedUTXOs.length * 148 + 34 * 2 + 10;
-const estimatedFee = feeRate * txSize;
-const totalNeeded = satoshisNeeded + estimatedFee;
-
-if (totalAvailable < totalNeeded) {
-const shortage = totalNeeded - totalAvailable;
-throw new Error(
-`Insufficient funds! Have ${totalAvailable} sats (${(totalAvailable/100000000).toFixed(8)} BTC), ` +
-`Need ${totalNeeded} sats (${(totalNeeded/100000000).toFixed(8)} BTC) including fee. ` +
-`Shortage: ${shortage} sats (${(shortage/100000000).toFixed(8)} BTC).`
-);
-}
-
-let totalSats = totalAvailable;
-logger.info(`✅ Using ALL ${selectedUTXOs.length} UTXOs, total: ${totalSats} sats`);
-
-// Parse private key - SUPPORTS BOTH MAINNET AND TESTNET
-let keyPair;
-let privateKey = privateKeyInput;
-
-// If privateKey is Uint8Array
-if (privateKey instanceof Uint8Array) {
-keyPair = ECPair.fromPrivateKey(Buffer.from(privateKey));
-logger.info('✅ Using Uint8Array private key');
-}
-// If privateKey is Buffer
-else if (Buffer.isBuffer(privateKey)) {
-keyPair = ECPair.fromPrivateKey(privateKey);
-logger.info('✅ Using Buffer private key');
-}
-// If privateKey is string
-else if (typeof privateKey === "string") {
-const key = privateKey.trim();
-
-// WIF (Testnet or Mainnet)
-if (/^[5KLc]/.test(key)) {
-try {
-// Try testnet first (keys starting with 'c')
-keyPair = ECPair.fromWIF(key, bitcoin.networks.testnet);
-logger.info('✅ Using testnet WIF key');
-} catch (err) {
-try {
-// Fallback to mainnet (keys starting with '5', 'K', 'L')
-keyPair = ECPair.fromWIF(key, bitcoin.networks.bitcoin);
-logger.info('✅ Using mainnet WIF key');
-} catch (err2) {
-throw new Error(`Invalid WIF key: ${err2.message}`);
-}
-}
-}
-// Hex
-else if (/^(0x)?[0-9a-fA-F]{64}$/.test(key)) {
-const hex = key.replace(/^0x/, "");
-keyPair = ECPair.fromPrivateKey(Buffer.from(hex, "hex"));
-logger.info('✅ Using hex private key');
-}
-// Base64
-else {
-const buf = Buffer.from(key, "base64");
-if (buf.length === 32) {
-keyPair = ECPair.fromPrivateKey(buf);
-logger.info('✅ Using base64 private key');
-} else {
-throw new Error("Unsupported BTC private key format.");
-}
-}
-} else {
-throw new Error("Unsupported BTC private key type.");
-}
-
-const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
-
-// Add inputs
-for (const utxo of selectedUTXOs) {
-let rawTx;
-try {
-const response = await axios.get(`https://mempool.space/testnet/api/tx/${utxo.txid}/hex`);
-rawTx = response.data;
-} catch (error) {
-logger.warn('⚠️ Mempool.space tx fetch failed, trying blockchain.info...');
-const response = await axios.get(`https://blockchain.info/rawtx/${utxo.txid}`);
-rawTx = response.data;
-}
-
-psbt.addInput({
-hash: utxo.txid,
-index: utxo.vout,
-witnessUtxo: {
-script: Buffer.from(utxo.scriptpubkey, 'hex'),
-value: utxo.value
-}
-});
-}
-
-// Add output (recipient)
-psbt.addOutput({
-address: toAddress,
-value: satoshisNeeded
+// Initialize BTCWallet
+const btcWallet = new BTCWallet({
+privateKey: privateKeyInput,
+address: process.env.BTC_ADDRESS,
+network: 'testnet',
+mempoolApi: 'https://mempool.space/testnet/api',
+blockchainApi: 'https://blockstream.info/testnet/api'
 });
 
-// Calculate fee and change
-const fee = Math.min(estimatedFee, totalSats - satoshisNeeded - 1000);
-const change = totalSats - satoshisNeeded - fee;
+// Send the transaction
+const result = await btcWallet.send(toAddress, amountBTC);
 
-if (change > 546) {
-psbt.addOutput({
-address: fromAddress,
-value: change
-});
-logger.info(`💰 Change: ${change} sats sent back to wallet`);
-} else {
-logger.info(`💰 No significant change (${change} sats)`);
-}
+logger.info(`✅ BTC Transaction sent! TxID: ${result.txId}`);
+logger.info(`🔗 Explorer: ${result.explorerUrl}`);
 
-logger.info(`💰 Actual fee: ${fee} sats`);
-
-// Sign inputs
-for (let i = 0; i < selectedUTXOs.length; i++) {
-psbt.signInput(i, keyPair);
-}
-
-psbt.finalizeAllInputs();
-const tx = psbt.extractTransaction();
-const txHex = tx.toHex();
-
-// Broadcast
-let broadcastResponse;
-try {
-broadcastResponse = await axios.post('https://mempool.space/testnet/api/tx', txHex);
-} catch (error) {
-logger.warn('⚠️ Mempool.space broadcast failed, trying blockchain.info...');
-broadcastResponse = await axios.post('https://blockchain.info/pushtx', `tx=${txHex}`);
-}
-
-logger.info(`✅ BTC Transaction broadcasted: ${broadcastResponse.data}`);
-return broadcastResponse.data;
+return result.txId;
 
 } catch (error) {
 logger.error('❌ BTC send error:', error.message);
