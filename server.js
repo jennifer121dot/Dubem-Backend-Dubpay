@@ -740,183 +740,161 @@ throw error;
 // ============================================================
 // 🔥 SEND BTC - FIXED! NOW USES ALL UTXOs
 // ============================================================
+// ============================================================
+// 🔥 SEND BTC - FIXED FOR p2wpkh (Native SegWit)
+// ============================================================
 async function sendBTC(privateKeyInput, toAddress, amountBTC) {
-try {
-const wallet = getWalletForCoin('BTC');
-logger.info(`📤 Sending ${amountBTC} BTC from ${wallet.address} to ${toAddress}`);
+    try {
+        logger.info(`📤 Sending ${amountBTC} BTC to ${toAddress}`);
+        
+        const wallet = getWalletForCoin('BTC');
+        const fromAddress = wallet.address;
+        
+        logger.info(`💰 From address: ${fromAddress}`);
 
-// Get UTXOs
-let utxos;
-try {
-const response = await axios.get(`https://mempool.space/testnet/api/address/${wallet.address}/utxo`);
-utxos = (response.data || []).filter(
-    utxo => utxo.status.confirmed
-);
-} catch (error) {
-logger.warn('⚠️ Mempool.space failed, trying blockchain.info...');
-const response = await axios.get(`https://blockchain.info/unspent?active=${wallet.address}`);
-utxos = response.data.unspent_outputs.map(utxo => ({
-txid: utxo.tx_hash,
-vout: utxo.tx_output_n,
-value: utxo.value,
-scriptpubkey: utxo.script
-}));
-}
-
-if (!utxos || utxos.length === 0) {
-throw new Error('No UTXOs found for this address. Please fund your BTC wallet.');
-}
-
-const satoshisNeeded = Math.round(amountBTC * 100000000);
-
-// ✅ FIXED: Use ALL UTXOs
-const totalAvailable = utxos.reduce((sum, utxo) => sum + utxo.value, 0);
-logger.info(`💰 Total available: ${totalAvailable} sats (${(totalAvailable/100000000).toFixed(8)} BTC)`);
-
-// Calculate fee based on number of UTXOs
-const feeRate = 10; // sats/vbyte
-
-let selectedUTXOs = utxos;
-
-const txSize =
-selectedUTXOs.length * 148 +
-34 * 2 +
-10;
-
-const estimatedFee =
-feeRate * txSize;
-const totalNeeded = satoshisNeeded + estimatedFee;
-
-if (totalAvailable < totalNeeded) {
-const shortage = totalNeeded - totalAvailable;
-throw new Error(
-`Insufficient funds! Have ${totalAvailable} sats (${(totalAvailable/100000000).toFixed(8)} BTC), ` +
-`Need ${totalNeeded} sats (${(totalNeeded/100000000).toFixed(8)} BTC) including fee. ` +
-`Shortage: ${shortage} sats (${(shortage/100000000).toFixed(8)} BTC).`
-);
-}
-
-// ✅ FIXED: Select ALL UTXOs, not just some
-let totalSats = totalAvailable;
-
-logger.info(`✅ Using ALL ${selectedUTXOs.length} UTXOs, total: ${totalSats} sats`);
-
-let privateKeyWIF = privateKeyInput;
-if (privateKeyInput instanceof Uint8Array) {
-privateKeyWIF = Buffer.from(privateKeyInput).toString('hex');
-}
-if (Buffer.isBuffer(privateKeyInput)) {
-privateKeyWIF = privateKeyInput.toString('hex');
-}
-
-let keyPair;
-
-if (privateKeyInput instanceof Uint8Array) {
-    keyPair = ECPair.fromPrivateKey(Buffer.from(privateKeyInput));
-}
-else if (Buffer.isBuffer(privateKeyInput)) {
-    keyPair = ECPair.fromPrivateKey(privateKeyInput);
-}
-else if (typeof privateKeyInput === "string") {
-
-    const key = privateKeyInput.trim();
-
-    // WIF (Mainnet or Testnet)
-    if (/^[5KLc]/.test(key)) {
+        // Get UTXOs
+        let utxos;
         try {
-            keyPair = ECPair.fromWIF(key, bitcoin.networks.testnet);
-        } catch {
-            keyPair = ECPair.fromWIF(key, bitcoin.networks.bitcoin);
+            const response = await axios.get(`https://mempool.space/testnet/api/address/${fromAddress}/utxo`);
+            utxos = (response.data || []).filter(utxo => utxo.status.confirmed);
+        } catch (error) {
+            logger.warn('⚠️ Mempool.space failed, trying blockchain.info...');
+            const response = await axios.get(`https://blockchain.info/unspent?active=${fromAddress}`);
+            utxos = response.data.unspent_outputs.map(utxo => ({
+                txid: utxo.tx_hash,
+                vout: utxo.tx_output_n,
+                value: utxo.value,
+                scriptpubkey: utxo.script
+            }));
         }
-    }
 
-    // Hex
-    else if (/^(0x)?[0-9a-fA-F]{64}$/.test(key)) {
-        const hex = key.replace(/^0x/, "");
-        keyPair = ECPair.fromPrivateKey(Buffer.from(hex, "hex"));
-    }
+        if (!utxos || utxos.length === 0) {
+            throw new Error('No UTXOs found for this address. Please fund your BTC wallet.');
+        }
 
-    // Base64
-    else {
-        const buf = Buffer.from(key, "base64");
+        const satoshisNeeded = Math.round(amountBTC * 100000000);
+        const totalAvailable = utxos.reduce((sum, utxo) => sum + utxo.value, 0);
+        logger.info(`💰 Total available: ${totalAvailable} sats (${(totalAvailable/100000000).toFixed(8)} BTC)`);
 
-        if (buf.length === 32) {
-            keyPair = ECPair.fromPrivateKey(buf);
+        // Calculate fee
+        const feeRate = 10; // sats/vbyte
+        let selectedUTXOs = utxos;
+        const txSize = selectedUTXOs.length * 148 + 34 * 2 + 10;
+        const estimatedFee = feeRate * txSize;
+        const totalNeeded = satoshisNeeded + estimatedFee;
+
+        if (totalAvailable < totalNeeded) {
+            const shortage = totalNeeded - totalAvailable;
+            throw new Error(
+                `Insufficient funds! Have ${totalAvailable} sats, Need ${totalNeeded} sats. ` +
+                `Shortage: ${shortage} sats.`
+            );
+        }
+
+        let totalSats = totalAvailable;
+        logger.info(`✅ Using ${selectedUTXOs.length} UTXOs, total: ${totalSats} sats`);
+
+        // Parse private key from WIF format
+        let keyPair;
+        
+        // Your key is in WIF format (starts with 'c' for testnet)
+        if (typeof privateKeyInput === "string") {
+            const key = privateKeyInput.trim();
+            
+            // Check if it's WIF format
+            if (/^[5KLc]/.test(key)) {
+                try {
+                    // Try testnet first (your key starts with 'c')
+                    keyPair = ECPair.fromWIF(key, bitcoin.networks.testnet);
+                    logger.info('✅ Using testnet WIF key');
+                } catch (err) {
+                    try {
+                        // Fallback to mainnet
+                        keyPair = ECPair.fromWIF(key, bitcoin.networks.bitcoin);
+                        logger.info('✅ Using mainnet WIF key');
+                    } catch (err2) {
+                        throw new Error(`Invalid WIF key: ${err2.message}`);
+                    }
+                }
+            } else if (/^(0x)?[0-9a-fA-F]{64}$/.test(key)) {
+                const hex = key.replace(/^0x/, "");
+                keyPair = ECPair.fromPrivateKey(Buffer.from(hex, "hex"));
+                logger.info('✅ Using hex private key');
+            } else {
+                const buf = Buffer.from(key, "base64");
+                if (buf.length === 32) {
+                    keyPair = ECPair.fromPrivateKey(buf);
+                    logger.info('✅ Using base64 private key');
+                } else {
+                    throw new Error("Unsupported BTC private key format.");
+                }
+            }
         } else {
-            throw new Error("Unsupported BTC private key format.");
+            throw new Error("Private key must be a string");
         }
+
+        const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
+
+        // ✅ FIX: Add inputs with proper p2wpkh handling
+        for (const utxo of selectedUTXOs) {
+            // For p2wpkh, we need to use witnessUtxo without script
+            psbt.addInput({
+                hash: utxo.txid,
+                index: utxo.vout,
+                witnessUtxo: {
+                    script: Buffer.from(utxo.scriptpubkey, 'hex'),
+                    value: utxo.value
+                }
+            });
+        }
+
+        // Add output (recipient)
+        psbt.addOutput({
+            address: toAddress,
+            value: satoshisNeeded
+        });
+
+        // Calculate fee and change
+        const fee = Math.min(estimatedFee, totalSats - satoshisNeeded - 1000);
+        const change = totalSats - satoshisNeeded - fee;
+
+        if (change > 546) {
+            psbt.addOutput({
+                address: fromAddress,
+                value: change
+            });
+            logger.info(`💰 Change: ${change} sats sent back to wallet`);
+        } else {
+            logger.info(`💰 No significant change (${change} sats)`);
+        }
+
+        logger.info(`💰 Actual fee: ${fee} sats`);
+
+        // ✅ FIX: Sign inputs properly for p2wpkh
+        for (let i = 0; i < selectedUTXOs.length; i++) {
+            psbt.signInput(i, keyPair);
+        }
+
+        psbt.finalizeAllInputs();
+        const tx = psbt.extractTransaction();
+        const txHex = tx.toHex();
+
+        // Broadcast
+        let broadcastResponse;
+        try {
+            broadcastResponse = await axios.post('https://mempool.space/testnet/api/tx', txHex);
+        } catch (error) {
+            logger.warn('⚠️ Mempool.space broadcast failed, trying blockchain.info...');
+            broadcastResponse = await axios.post('https://blockchain.info/pushtx', `tx=${txHex}`);
+        }
+
+        logger.info(`✅ BTC Transaction broadcasted: ${broadcastResponse.data}`);
+        return broadcastResponse.data;
+        
+    } catch (error) {
+        logger.error('❌ BTC send error:', error.message);
+        throw error;
     }
-}
-else {
-    throw new Error("Unsupported BTC private key type.");
-}
-
-const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
-
-for (const utxo of selectedUTXOs) {
-let rawTx;
-try {
-const response = await axios.get(`https://mempool.space/testnet/api/tx/${utxo.txid}/hex`);
-rawTx = response.data;
-} catch (error) {
-logger.warn('⚠️ Mempool.space tx fetch failed, trying blockchain.info...');
-const response = await axios.get(`https://blockchain.info/rawtx/${utxo.txid}`);
-rawTx = response.data;
-}
-
-psbt.addInput({
-  hash: utxo.txid,
-  index: utxo.vout,
-  witnessUtxo: {
-    script: Buffer.from(utxo.scriptpubkey, 'hex'),
-    value: utxo.value
-  }
-});
-}
-
-psbt.addOutput({
-address: toAddress,
-value: satoshisNeeded
-});
-
-// Calculate fee and change
-const fee = Math.min(estimatedFee, totalSats - satoshisNeeded - 1000);
-const change = totalSats - satoshisNeeded - fee;
-
-if (change > 546) {
-psbt.addOutput({
-address: wallet.address,
-value: change
-});
-logger.info(`💰 Change: ${change} sats sent back to wallet`);
-} else {
-logger.info(`💰 No significant change (${change} sats)`);
-}
-
-logger.info(`💰 Actual fee: ${fee} sats`);
-
-for (let i = 0; i < selectedUTXOs.length; i++) {
-psbt.signInput(i, keyPair);
-}
-
-psbt.finalizeAllInputs();
-const tx = psbt.extractTransaction();
-const txHex = tx.toHex();
-
-let broadcastResponse;
-try {
-broadcastResponse = await axios.post('https://mempool.space/testnet/api/tx', txHex);
-} catch (error) {
-logger.warn('⚠️ Mempool.space broadcast failed, trying blockchain.info...');
-broadcastResponse = await axios.post('https://blockchain.info/pushtx', `tx=${txHex}`);
-}
-
-logger.info(`✅ BTC Transaction broadcasted: ${broadcastResponse.data}`);
-return broadcastResponse.data;
-} catch (error) {
-logger.error('❌ BTC send error:', error.message);
-throw error;
-}
 }
 
 // 📌 SEND ETH
