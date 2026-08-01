@@ -797,7 +797,6 @@ throw new Error(
 }
 
 // ✅ FIXED: Select ALL UTXOs, not just some
-let selectedUTXOs = utxos;
 let totalSats = totalAvailable;
 
 logger.info(`✅ Using ALL ${selectedUTXOs.length} UTXOs, total: ${totalSats} sats`);
