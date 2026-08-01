@@ -438,7 +438,7 @@ const errors = [];
 // PRIMARY: blockchair.com
 try {
 logger.info(`📡 Checking BTC via blockchair.com for: ${address}`);
-const response = await axios.get(`https://api.blockchair.com/bitcoin/dashboards/address/${address}`, {
+const response = await axios.get(`https://api.blockchair.com/bitcoin/testnet/dashboards/address/${address}`, {
 timeout: 10000
 });
 const balance = response.data.data[address].address.balance / 100000000;
@@ -452,22 +452,22 @@ logger.warn(`⚠️ Blockchair.com failed: ${error.message}`);
 // FALLBACK 1: blockchain.info
 try {
 logger.info(`📡 Checking BTC via blockchain.info for: ${address}`);
-const response = await axios.get(`https://blockchain.info/q/addressbalance/${address}`, {
+const response = await axios.get(`https://blockstream.info/testnet/api/address/{address}`, {
 headers: { 'Cache-Control': 'no-cache' },
 timeout: 8000
 });
 const balance = response.data / 100000000;
-logger.info(`💰 BTC Balance (blockchain.info): ${balance} BTC`);
+logger.info(`💰 BTC Balance (blockstream.info): ${balance} BTC`);
 return balance;
 } catch (error) {
-errors.push(`blockchain.info: ${error.message}`);
+errors.push(`blockstream.info: ${error.message}`);
 logger.warn(`⚠️ Blockchain.info failed: ${error.message}`);
 }
 
 // FALLBACK 2: mempool.space
 try {
 logger.info(`📡 Checking BTC via mempool.space for: ${address}`);
-const response = await axios.get(`https://mempool.space/api/address/${address}`, {
+const response = await axios.get(`https://mempool.space/testnet/api/address/${address}`, {
 headers: { 'Cache-Control': 'no-cache' },
 timeout: 8000
 });
