@@ -1530,14 +1530,25 @@ headers: {
 const data = await response.json();
 
 if (data.status === 'success' && data.data.status === 'successful') {
-order.status = 'verified';
-await updateSheetRow(tx_ref, { status: 'verified' });
-logger.info(`✅ Payment verified for: ${tx_ref}`);
-res.json({
-success: true,
-message: 'Payment verified! Your crypto is being sent...',
-order: order
-});
+
+    if (order.status !== 'completed') {
+        const result = await processSuccessfulOrder(order, data.data);
+
+        if (!result.success) {
+            return res.status(500).json({
+                success: false,
+                error: result.error
+            });
+        }
+    }
+
+    logger.info(`✅ Payment verified for: ${tx_ref}`);
+
+    return res.json({
+        success: true,
+        message: 'Payment verified and crypto sent!',
+        order
+    });
 } else if (order.status === 'completed') {
 res.json({
 success: true,
@@ -1590,7 +1601,9 @@ return res.status(401).send('Invalid signature');
 }
 
 const event = req.body;
-logger.info(`📥 Webhook received: ${event.event}`);
+
+logger.info("📥 Full webhook payload:");
+logger.info(JSON.stringify(event, null, 2));
 
 if (event.event === 'charge.completed' && event.data.status === 'successful') {
 const tx_ref = event.data.tx_ref;
